@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Matches</title>
+<style>
+  :root { --bg:#f6f7f9; --surface:#fff; --text:#1c2430; --muted:#6a7482; --line:#dde1e7; --accent:#1f5fbf; --accent-soft:#e6eefb; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#14181f; --surface:#1c222b; --text:#e8ecf1; --muted:#98a2b0; --line:#323a46; --accent:#6ea4f4; --accent-soft:#24324a; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; padding:32px 20px; background:var(--bg); color:var(--text); font:15px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
+  main { max-width:1100px; margin:0 auto; }
+  .bar { display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin-bottom:14px; }
+  .dd { position:relative; }
+  .dd > button { font:inherit; color:inherit; background:var(--surface); border:1px solid var(--line); border-radius:6px; padding:8px 12px; cursor:pointer; display:flex; gap:8px; align-items:center; }
+  button:focus-visible, a:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+  .dd.active > button { border-color:var(--accent); background:var(--accent-soft); }
+  .badge { background:var(--accent); color:#fff; border-radius:10px; font-size:12px; padding:0 7px; }
+  .panel { position:absolute; z-index:5; top:calc(100% + 4px); left:0; min-width:200px; max-height:300px; overflow:auto; background:var(--surface); border:1px solid var(--line); border-radius:6px; box-shadow:0 6px 20px rgba(0,0,0,.15); padding:6px; display:none; }
+  .dd.open .panel { display:block; }
+  .panel label { display:flex; gap:8px; align-items:center; padding:5px 8px; border-radius:4px; cursor:pointer; white-space:nowrap; }
+  .panel label:hover { background:var(--accent-soft); }
+  .panel .none { padding:6px 8px; color:var(--muted); }
+  .clear { font:inherit; background:none; border:none; color:var(--accent); cursor:pointer; padding:8px 4px; }
+  .count { color:var(--muted); font-size:13px; margin-left:auto; }
+  .status { color:var(--muted); font-size:13px; margin:0 0 14px; }
+  .wrap { overflow-x:auto; border:1px solid var(--line); border-radius:6px; background:var(--surface); }
+  table { width:100%; border-collapse:collapse; }
+  th, td { text-align:left; padding:9px 14px; border-bottom:1px solid var(--line); white-space:nowrap; }
+  th { font-size:13px; color:var(--muted); font-weight:600; }
+  th button { font:inherit; font-weight:600; color:var(--text); background:none; border:none; padding:0; cursor:pointer; }
+  tr:last-child td { border-bottom:none; }
+  td.num, th.num { text-align:right; }
+  td a { color:var(--accent); }
+  td.empty { color:var(--muted); text-align:center; padding:24px; }
+</style>
+</head>
+<body>
+<main>
+  <p id="status" class="status" hidden></p>
+  <div class="bar" id="bar"></div>
+  <div class="wrap"><table>
+    <thead><tr id="head"></tr></thead>
+    <tbody id="body"></tbody>
+  </table></div>
+</main>
+
+<script>
+// ---- Paste your published Google Sheet CSV link between the quotes ----
+// (Google Sheets: File > Share > Publish to web > choose the sheet > CSV)
+// Row 1 of the sheet = column headers. Every column in row 1 is shown.
+const SHEET_CSV_URL = "";
+// ------------------------------------------------------------------------
+
+// Columns that get a filter dropdown, and the column that can be sorted (matched by header name)
+const FILTER_COLUMNS = ["Самолет", "Ранг", "Нация", "Исход", "Особенности"];
+const SORT_COLUMN = "Фраги";
+
+// Interface text
+const TEXT = {
+  clear: "Clear filters",
+  rows: (n, total) => n + " of " + total + " rows",
+  blank: "(blank)",
+  link: "Open",
+  noRows: "No rows match these filters",
+  loading: "Loading data from Google Sheets…",
+  failed: msg => "Couldn't load the Google Sheet (" + msg + "). Showing sample data instead."
+};
+
+// Sample data, used when no link is set or the sheet can't be loaded
+const FALLBACK_COLUMNS = ["Самолет", "Ранг", "Нация", "Бой", "Позиция по БР", "Фраги", "Исход", "Особенности", "Стрим"];
+const FALLBACK_DATA = [
+  ["CL-13B Mk.6", 5, "Germany", "https://youtu.be/x8cJs7j5GvE?t=298", "низ списка", 1, "ошибка", "", "https://youtu.be/x8cJs7j5GvE"],
+  ["CL-13B Mk.6", 5, "Germany", "https://youtu.be/x8cJs7j5GvE?t=607", "", 7, "топ", "", "https://youtu.be/x8cJs7j5GvE"],
+  ["Yak-38M", 6, "USSR", "https://youtu.be/x8cJs7j5GvE?t=2305", "низ списка", 3, "", "", "https://youtu.be/x8cJs7j5GvE"],
+  ["MiG-21S", 6, "USSR", "https://youtu.be/x8cJs7j5GvE?t=3129", "низ списка", 5, "топ", "", "https://youtu.be/x8cJs7j5GvE"],
+  ["MiG-21MF", 7, "USSR", "https://youtu.be/x8cJs7j5GvE?t=4315", "низ списка", 5, "топ", "", "https://youtu.be/x8cJs7j5GvE"],
+  ["Su-11", 5, "USSR", "https://youtu.be/x8cJs7j5GvE?t=5925", "топ списка", 5, "топ", "", "https://youtu.be/x8cJs7j5GvE"],
+  ["Milan", 6, "France", "https://youtu.be/x8cJs7j5GvE?t=7449", "низ списка", 4, "", "", "https://youtu.be/x8cJs7j5GvE"],
+  ["F-106A", 5, "USA", "https://youtu.be/x8cJs7j5GvE?t=8469", "низ списка", 5, "топ", "", "https://youtu.be/x8cJs7j5GvE"],
+  ["F2H-2", 5, "USA", "https://youtu.be/x8cJs7j5GvE?t=9447", "", 1, "", "", "https://youtu.be/x8cJs7j5GvE"],
+  ["F2H-2", 5, "USA", "https://youtu.be/x8cJs7j5GvE?t=10034", "низ списка", 4, "ошибка", "", "https://youtu.be/x8cJs7j5GvE"],
+  ["Ki-200", 5, "Japan", "https://youtu.be/x8cJs7j5GvE?t=10856", "низ списка", 2, "", "ракетный самолет", "https://youtu.be/x8cJs7j5GvE"],
+  ["F-111F", 7, "USA", "https://youtu.be/x8cJs7j5GvE?t=12047", "", 0, "ошибка", "стреловидность", "https://youtu.be/x8cJs7j5GvE"],
+  ["G.91 R/4", 5, "Germany", "https://youtu.be/x8cJs7j5GvE?t=12988", "низ списка", 5, "топ", "", "https://youtu.be/x8cJs7j5GvE"],
+  ["Vautour IIN [L]", 5, "France", "https://youtu.be/x8cJs7j5GvE?t=13904", "низ списка", 4, "", "", "https://youtu.be/x8cJs7j5GvE"],
+  ["A-10A [E]", 6, "USA", "https://youtu.be/x8cJs7j5GvE?t=14706", "", 5, "топ", "ночная", "https://youtu.be/x8cJs7j5GvE"],
+  ["Yak-3", 3, "USSR", "https://youtu.be/x8cJs7j5GvE?t=15738", "", 2, "ошибка", "поршень", "https://youtu.be/x8cJs7j5GvE"],
+  ["Yak-3", 3, "USSR", "https://youtu.be/x8cJs7j5GvE?t=16429", "", 1, "ошибка", "поршень", "https://youtu.be/x8cJs7j5GvE"],
+  ["I-16 type 27", 2, "USSR", "https://youtu.be/x8cJs7j5GvE?t=17403", "", 5, "топ", "поршень", "https://youtu.be/x8cJs7j5GvE"],
+  ["La-200", 5, "USSR", "https://youtu.be/x8cJs7j5GvE?t=18055", "топ списка", 3, "", "", "https://youtu.be/x8cJs7j5GvE"],
+  ["Yak-130", 5, "USSR", "https://youtu.be/x8cJs7j5GvE?t=18874", "низ списка", 4, "", "", "https://youtu.be/x8cJs7j5GvE"],
+  ["Su-25", 6, "USSR", "https://youtu.be/x8cJs7j5GvE?t=19590", "низ списка", 0, "", "штурмовка", "https://youtu.be/x8cJs7j5GvE"],
+  ["Su-25", 6, "USSR", "https://youtu.be/x8cJs7j5GvE?t=20118", "", 4, "", "", "https://youtu.be/x8cJs7j5GvE"],
+  ["Su-25", 6, "USSR", "https://youtu.be/x8cJs7j5GvE?t=20980", "низ списка", 0, "", "бомбежка баз", "https://youtu.be/x8cJs7j5GvE"],
+  ["Su-25BM", 6, "USSR", "https://youtu.be/x8cJs7j5GvE?t=21852", "", 5, "", "", "https://youtu.be/x8cJs7j5GvE"],
+  ["Su-25T", 6, "USSR", "https://youtu.be/x8cJs7j5GvE?t=22667", "низ списка", 2, "", "", "https://youtu.be/x8cJs7j5GvE"],
+  ["Su-25T", 6, "USSR", "https://youtu.be/x8cJs7j5GvE?t=23326", "", 0, "", "", "https://youtu.be/x8cJs7j5GvE"],
+  ["Yak-15P", 5, "USSR", "https://youtu.be/x8cJs7j5GvE?t=23819", "", 2, "", "", "https://youtu.be/x8cJs7j5GvE"],
+  ["Yak-15P", 5, "USSR", "https://youtu.be/x8cJs7j5GvE?t=24453", "", 2, "", "", "https://youtu.be/x8cJs7j5GvE"],
+  ["Yak-17", 5, "USSR", "https://youtu.be/x8cJs7j5GvE?t=25985", "", 4, "", "", "https://youtu.be/x8cJs7j5GvE"],
+  ["Kikka", 5, "Japan", "https://youtu.be/x8cJs7j5GvE?t=26998", "топ списка", 3, "", "", "https://youtu.be/x8cJs7j5GvE"],
+  ["JA37D", 8, "Sweden", "https://youtu.be/x8cJs7j5GvE?t=27530", "низ списка", 4, "", "дельта", "https://youtu.be/x8cJs7j5GvE"],
+  ["Shenyang F-5", 5, "China", "https://youtu.be/x8cJs7j5GvE?t=28063", "топ списка", 4, "", "", "https://youtu.be/x8cJs7j5GvE"],
+  ["J-7D", 7, "China", "https://youtu.be/x8cJs7j5GvE?t=29205", "низ списка", 6, "топ", "дельта", "https://youtu.be/x8cJs7j5GvE"],
+  ["F-80A-5", 5, "USA", "https://youtu.be/x8cJs7j5GvE?t=30048", "низ списка", 6, "топ", "", "https://youtu.be/x8cJs7j5GvE"],
+  ["MiG-19PT", 6, "USSR", "https://youtu.be/x8cJs7j5GvE?t=31203", "низ списка", 4, "ошибка", "", "https://youtu.be/x8cJs7j5GvE"],
+  ["Fw 190 D-9", 3, "Germany", "https://youtu.be/x8cJs7j5GvE?t=32077", "", 0, "ошибка", "поршень", "https://youtu.be/x8cJs7j5GvE"],
+  ["Fw 190 D-9", 3, "Germany", "https://youtu.be/x8cJs7j5GvE?t=32591", "", 1, "ошибка", "поршень", "https://youtu.be/x8cJs7j5GvE"],
+  ["АF-4E", 7, "Israel", "https://youtu.be/x8cJs7j5GvE?t=33031", "", 4, "ошибка", "", "https://youtu.be/x8cJs7j5GvE"],
+  ["F-106A5", 6, "USA", "https://youtu.be/aaSthxX-bNg?t=918", "", "", "топ", "", ""],
+  ["Yak-38", 6, "USSR", "https://youtu.be/aaSthxX-bNg?t=2358", "", "", "топ", "", ""],
+  ["F-4E Kurnass", 7, "Israel", "https://youtu.be/aaSthxX-bNg?t=3908", "", "", "", "", ""],
+  ["Т-2", 6, "Japan", "https://youtu.be/aaSthxX-bNg?t=5306", "", "", "", "", ""]
+];
+
+let COLUMNS = [], DATA = [], numCols = [], filterIdx = [];
+let sortIdx = -1, sortDir = 0;           // sortDir: 0 = sheet order, -1 = high to low, 1 = low to high
+let selected = {}, dds = {};              // keyed by column index; empty set = no filter
+
+const bar = document.getElementById("bar");
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const isUrl = v => /^https?:\/\//i.test(v);
+const isNum = i => numCols[i];
+
+// Rows matching every filter, optionally ignoring one column
+function matching(skip = -1) {
+  return DATA.filter(r => filterIdx.every(i => i === skip || selected[i].size === 0 || selected[i].has(String(r[i]))));
+}
+
+function buildBar() {
+  bar.innerHTML = ""; dds = {};
+  filterIdx.forEach(i => {
+    const el = document.createElement("div");
+    el.className = "dd";
+    el.innerHTML = '<button type="button" aria-haspopup="true"><span class="lbl"></span><span class="badge" hidden></span></button><div class="panel"></div>';
+    el.firstChild.addEventListener("click", e => {
+      e.stopPropagation();
+      Object.values(dds).forEach(d => d !== el && d.classList.remove("open"));
+      el.classList.toggle("open");
+    });
+    el.querySelector(".panel").addEventListener("click", e => e.stopPropagation());
+    bar.appendChild(el); dds[i] = el;
+  });
+  const clearBtn = document.createElement("button");
+  clearBtn.className = "clear"; clearBtn.id = "clear"; clearBtn.type = "button"; clearBtn.hidden = true;
+  clearBtn.textContent = TEXT.clear;
+  clearBtn.onclick = () => { filterIdx.forEach(i => selected[i].clear()); render(); };
+  const countEl = document.createElement("span");
+  countEl.className = "count"; countEl.id = "count";
+  bar.append(clearBtn, countEl);
+}
+document.addEventListener("click", () => Object.values(dds).forEach(d => d.classList.remove("open")));
+
+function renderHead() {
+  const tr = document.getElementById("head"); tr.innerHTML = "";
+  COLUMNS.forEach((name, i) => {
+    const th = document.createElement("th");
+    if (isNum(i)) th.className = "num";
+    if (i === sortIdx) {
+      th.setAttribute("aria-sort", sortDir === 1 ? "ascending" : sortDir === -1 ? "descending" : "none");
+      const b = document.createElement("button");
+      b.type = "button";
+      b.title = "Sort";
+      b.textContent = name + " " + (sortDir === 1 ? "▲" : sortDir === -1 ? "▼" : "⇅");
+      b.onclick = () => { sortDir = sortDir === 0 ? -1 : sortDir === -1 ? 1 : 0; render(); };
+      th.appendChild(b);
+    } else th.textContent = name;
+    tr.appendChild(th);
+  });
+}
+
+const cmpVals = i => isNum(i) ? (a, b) => a - b : (a, b) => String(a).localeCompare(String(b), "ru");
+
+function render() {
+  // Drop ticked values that are no longer compatible with the other filters
+  let changed = true;
+  while (changed) {
+    changed = false;
+    filterIdx.forEach(i => {
+      const avail = new Set(matching(i).map(r => String(r[i])));
+      [...selected[i]].forEach(v => { if (!avail.has(v)) { selected[i].delete(v); changed = true; } });
+    });
+  }
+
+  // Options for each filter come from rows matching all OTHER filters
+  filterIdx.forEach(i => {
+    const vals = [...new Set(matching(i).map(r => r[i]))];
+    const filled = vals.filter(v => v !== "").sort(cmpVals(i));
+    const opts = vals.includes("") ? [...filled, ""] : filled;      // blank option goes last
+    const panel = dds[i].querySelector(".panel");
+    panel.innerHTML = opts.length ? "" : '<div class="none">—</div>';
+    opts.forEach(v => {
+      const lab = document.createElement("label");
+      const cb = document.createElement("input");
+      cb.type = "checkbox"; cb.checked = selected[i].has(String(v));
+      cb.onchange = () => { cb.checked ? selected[i].add(String(v)) : selected[i].delete(String(v)); render(); };
+      lab.append(cb, document.createTextNode(v === "" ? TEXT.blank : v));
+      panel.appendChild(lab);
+    });
+    const n = selected[i].size, badge = dds[i].querySelector(".badge");
+    dds[i].querySelector(".lbl").textContent = COLUMNS[i];
+    badge.hidden = !n; badge.textContent = n;
+    dds[i].classList.toggle("active", n > 0);
+  });
+
+  let rows = matching();
+  if (sortIdx >= 0 && sortDir !== 0) {
+    const c = cmpVals(sortIdx);
+    rows = rows.slice().sort((a, b) => {
+      const ea = a[sortIdx] === "", eb = b[sortIdx] === "";
+      if (ea || eb) return ea === eb ? 0 : ea ? 1 : -1;               // blanks always last
+      return sortDir * c(a[sortIdx], b[sortIdx]);
+    });
+  }
+
+  renderHead();
+  document.getElementById("body").innerHTML = rows.length
+    ? rows.map(r => "<tr>" + r.map((v, i) => {
+        const cls = isNum(i) ? ' class="num"' : "";
+        const cell = isUrl(v) ? '<a href="' + esc(v) + '" target="_blank" rel="noopener">' + TEXT.link + "</a>" : esc(v);
+        return "<td" + cls + ">" + cell + "</td>";
+      }).join("") + "</tr>").join("")
+    : '<tr><td class="empty" colspan="' + COLUMNS.length + '">' + TEXT.noRows + "</td></tr>";
+  document.getElementById("clear").hidden = filterIdx.every(i => !selected[i].size);
+  document.getElementById("count").textContent = TEXT.rows(rows.length, DATA.length);
+}
+
+function parseCSV(text) {
+  const rows = []; let row = [], f = "", q = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (q) { if (c === '"') { if (text[i + 1] === '"') { f += '"'; i++; } else q = false; } else f += c; }
+    else if (c === '"') q = true;
+    else if (c === ",") { row.push(f); f = ""; }
+    else if (c === "\n" || c === "\r") { if (c === "\r" && text[i + 1] === "\n") i++; row.push(f); f = ""; rows.push(row); row = []; }
+    else f += c;
+  }
+  if (f !== "" || row.length) { row.push(f); rows.push(row); }
+  return rows.filter(r => r.some(x => x.trim() !== ""));
+}
+
+function useData(cols, rows) {
+  COLUMNS = cols;
+  numCols = cols.map((_, i) => rows.some(r => r[i] !== "") && rows.every(r => r[i] === "" || (typeof r[i] === "number") || (r[i] !== null && !isNaN(r[i]))));
+  DATA = rows.map(r => r.map((v, i) => (numCols[i] && v !== "") ? Number(v) : v));
+  filterIdx = FILTER_COLUMNS.map(n => cols.indexOf(n)).filter(i => i >= 0);
+  sortIdx = cols.indexOf(SORT_COLUMN); sortDir = 0;
+  selected = {}; filterIdx.forEach(i => selected[i] = new Set());
+  buildBar();
+  render();
+}
+
+function setStatus(msg) {
+  const el = document.getElementById("status");
+  el.textContent = msg; el.hidden = !msg;
+}
+
+async function load() {
+  if (!SHEET_CSV_URL) { useData(FALLBACK_COLUMNS, FALLBACK_DATA); return; }
+  setStatus(TEXT.loading);
+  try {
+    const res = await fetch(SHEET_CSV_URL);
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const [head, ...body] = parseCSV(await res.text());
+    if (!head || !body.length) throw new Error("the sheet is empty");
+    const n = head.length;
+    useData(head.map(h => h.trim()), body.map(r => Array.from({ length: n }, (_, i) => (r[i] || "").trim())));
+    setStatus("");
+  } catch (err) {
+    useData(FALLBACK_COLUMNS, FALLBACK_DATA);
+    setStatus(TEXT.failed(err.message));
+  }
+}
+load();
+</script>
+</body>
+</html>
