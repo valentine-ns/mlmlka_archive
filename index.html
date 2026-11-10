@@ -14,11 +14,15 @@
   main { max-width:1100px; margin:0 auto; }
   .bar { display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin-bottom:14px; }
   .dd { position:relative; }
-  .dd > button { font:inherit; color:inherit; background:var(--surface); border:1px solid var(--line); border-radius:6px; padding:8px 12px; cursor:pointer; display:flex; gap:8px; align-items:center; }
+  .hc { display:flex; align-items:center; gap:6px; }
+  th.num .hc { justify-content:flex-end; }
+  .dd > button { font:inherit; font-size:13px; font-weight:600; color:var(--text); background:none; border:1px solid transparent; border-radius:6px; padding:3px 8px; margin-left:-8px; cursor:pointer; display:flex; gap:6px; align-items:center; }
+  .dd > button:hover { background:var(--accent-soft); }
+  .caret { font-size:10px; color:var(--muted); }
   button:focus-visible, a:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
   .dd.active > button { border-color:var(--accent); background:var(--accent-soft); }
   .badge { background:var(--accent); color:#fff; border-radius:10px; font-size:12px; padding:0 7px; }
-  .panel { position:absolute; z-index:5; top:calc(100% + 4px); left:0; min-width:200px; max-height:300px; overflow:auto; background:var(--surface); border:1px solid var(--line); border-radius:6px; box-shadow:0 6px 20px rgba(0,0,0,.15); padding:6px; display:none; }
+  .panel { position:fixed; z-index:20; min-width:200px; max-height:300px; overflow:auto; background:var(--surface); color:var(--text); font-size:14px; font-weight:400; border:1px solid var(--line); border-radius:6px; box-shadow:0 6px 20px rgba(0,0,0,.15); padding:6px; display:none; }
   .dd.open .panel { display:block; }
   .panel label { display:flex; gap:8px; align-items:center; padding:5px 8px; border-radius:4px; cursor:pointer; white-space:nowrap; }
   .panel label:hover { background:var(--accent-soft); }
@@ -57,6 +61,9 @@ const SHEET_CSV_URL = "";
 // Columns that get a filter dropdown, and the column that can be sorted (matched by header name)
 const FILTER_COLUMNS = ["Самолет", "Ранг", "Нация", "Исход", "Особенности"];
 const SORT_COLUMN = "Фраги";
+
+// Columns in the sheet that are not shown on the page (matched by header name)
+const HIDE_COLUMNS = ["Стрим"];
 
 // Interface text
 const TEXT = {
@@ -131,19 +138,7 @@ function matching(skip = -1) {
 }
 
 function buildBar() {
-  bar.innerHTML = ""; dds = {};
-  filterIdx.forEach(i => {
-    const el = document.createElement("div");
-    el.className = "dd";
-    el.innerHTML = '<button type="button" aria-haspopup="true"><span class="lbl"></span><span class="badge" hidden></span></button><div class="panel"></div>';
-    el.firstChild.addEventListener("click", e => {
-      e.stopPropagation();
-      Object.values(dds).forEach(d => d !== el && d.classList.remove("open"));
-      el.classList.toggle("open");
-    });
-    el.querySelector(".panel").addEventListener("click", e => e.stopPropagation());
-    bar.appendChild(el); dds[i] = el;
-  });
+  bar.innerHTML = "";
   const clearBtn = document.createElement("button");
   clearBtn.className = "clear"; clearBtn.id = "clear"; clearBtn.type = "button"; clearBtn.hidden = true;
   clearBtn.textContent = TEXT.clear;
@@ -152,24 +147,58 @@ function buildBar() {
   countEl.className = "count"; countEl.id = "count";
   bar.append(clearBtn, countEl);
 }
-document.addEventListener("click", () => Object.values(dds).forEach(d => d.classList.remove("open")));
+const closeAll = () => Object.values(dds).forEach(d => d.classList.remove("open"));
+document.addEventListener("click", closeAll);
+window.addEventListener("resize", closeAll);
+window.addEventListener("scroll", e => { if (!(e.target.closest && e.target.closest(".panel"))) closeAll(); }, true);
 
-function renderHead() {
-  const tr = document.getElementById("head"); tr.innerHTML = "";
+function placePanel(btn, panel) {
+  const r = btn.getBoundingClientRect();
+  panel.style.maxHeight = Math.max(120, Math.min(300, window.innerHeight - r.bottom - 16)) + "px";
+  panel.style.top = (r.bottom + 4) + "px";
+  panel.style.left = Math.max(8, Math.min(r.left, window.innerWidth - panel.offsetWidth - 8)) + "px";
+}
+
+// Header cells hold the controls: a filter dropdown, and/or a sort button, per column
+let sortBtn = null;
+function buildHead() {
+  const tr = document.getElementById("head"); tr.innerHTML = ""; dds = {}; sortBtn = null;
   COLUMNS.forEach((name, i) => {
     const th = document.createElement("th");
     if (isNum(i)) th.className = "num";
+    const box = document.createElement("div"); box.className = "hc";
+    if (filterIdx.includes(i)) {
+      const el = document.createElement("div");
+      el.className = "dd";
+      el.innerHTML = '<button type="button" aria-haspopup="true"><span class="lbl"></span><span class="badge" hidden></span><span class="caret">▾</span></button><div class="panel"></div>';
+      const btn = el.firstChild, panel = el.querySelector(".panel");
+      btn.addEventListener("click", e => {
+        e.stopPropagation();
+        const wasOpen = el.classList.contains("open");
+        closeAll();
+        if (!wasOpen) { el.classList.add("open"); placePanel(btn, panel); }
+      });
+      panel.addEventListener("click", e => e.stopPropagation());
+      box.appendChild(el); dds[i] = el;
+    }
     if (i === sortIdx) {
-      th.setAttribute("aria-sort", sortDir === 1 ? "ascending" : sortDir === -1 ? "descending" : "none");
-      const b = document.createElement("button");
-      b.type = "button";
-      b.title = "Sort";
-      b.textContent = name + " " + (sortDir === 1 ? "▲" : sortDir === -1 ? "▼" : "⇅");
-      b.onclick = () => { sortDir = sortDir === 0 ? -1 : sortDir === -1 ? 1 : 0; render(); };
-      th.appendChild(b);
-    } else th.textContent = name;
-    tr.appendChild(th);
+      sortBtn = document.createElement("button");
+      sortBtn.type = "button"; sortBtn.title = "Sort";
+      sortBtn.dataset.name = filterIdx.includes(i) ? "" : name;
+      sortBtn.onclick = () => { sortDir = sortDir === 0 ? -1 : sortDir === -1 ? 1 : 0; render(); };
+      box.appendChild(sortBtn);
+    } else if (!filterIdx.includes(i)) {
+      const t = document.createElement("span"); t.textContent = name; box.appendChild(t);
+    }
+    th.appendChild(box); tr.appendChild(th);
   });
+}
+
+function updateSort() {
+  if (!sortBtn) return;
+  const arrow = sortDir === 1 ? "▲" : sortDir === -1 ? "▼" : "⇅";
+  sortBtn.textContent = (sortBtn.dataset.name ? sortBtn.dataset.name + " " : "") + arrow;
+  sortBtn.closest("th").setAttribute("aria-sort", sortDir === 1 ? "ascending" : sortDir === -1 ? "descending" : "none");
 }
 
 const cmpVals = i => isNum(i) ? (a, b) => a - b : (a, b) => String(a).localeCompare(String(b), "ru");
@@ -190,7 +219,7 @@ function render() {
     const vals = [...new Set(matching(i).map(r => r[i]))];
     const filled = vals.filter(v => v !== "").sort(cmpVals(i));
     const opts = vals.includes("") ? [...filled, ""] : filled;      // blank option goes last
-    const panel = dds[i].querySelector(".panel");
+    const panel = dds[i].querySelector(".panel"), keepScroll = panel.scrollTop;
     panel.innerHTML = opts.length ? "" : '<div class="none">—</div>';
     opts.forEach(v => {
       const lab = document.createElement("label");
@@ -203,6 +232,7 @@ function render() {
     const n = selected[i].size, badge = dds[i].querySelector(".badge");
     dds[i].querySelector(".lbl").textContent = COLUMNS[i];
     badge.hidden = !n; badge.textContent = n;
+    panel.scrollTop = keepScroll;
     dds[i].classList.toggle("active", n > 0);
   });
 
@@ -216,7 +246,7 @@ function render() {
     });
   }
 
-  renderHead();
+  updateSort();
   document.getElementById("body").innerHTML = rows.length
     ? rows.map(r => "<tr>" + r.map((v, i) => {
         const cls = isNum(i) ? ' class="num"' : "";
@@ -243,6 +273,9 @@ function parseCSV(text) {
 }
 
 function useData(cols, rows) {
+  const keep = cols.map((c, i) => i).filter(i => !HIDE_COLUMNS.includes(cols[i]));
+  cols = keep.map(i => cols[i]);
+  rows = rows.map(r => keep.map(i => r[i]));
   COLUMNS = cols;
   numCols = cols.map((_, i) => rows.some(r => r[i] !== "") && rows.every(r => r[i] === "" || (typeof r[i] === "number") || (r[i] !== null && !isNaN(r[i]))));
   DATA = rows.map(r => r.map((v, i) => (numCols[i] && v !== "") ? Number(v) : v));
@@ -250,6 +283,7 @@ function useData(cols, rows) {
   sortIdx = cols.indexOf(SORT_COLUMN); sortDir = 0;
   selected = {}; filterIdx.forEach(i => selected[i] = new Set());
   buildBar();
+  buildHead();
   render();
 }
 
